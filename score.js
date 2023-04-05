@@ -22,34 +22,6 @@ else
 	network.saveBuffer(binFile);
 }
 
-//*/
-let dataset = trainingData.slice();
-
-shuffle(dataset);
-
-dataset = dataset.slice(0,);
-
-network.train({dataset, poolSize: 8, iterations: 1, rate: 0.0015}).then(() => {
-	let dataset = testingData.slice();
-
-	shuffle(dataset);
-
-	dataset = dataset.slice(0,);
-
-	return network.score({dataset, poolSize: 8});
-
-}).then(score => {
-
-	console.log(score);
-
-	if(!network.saveBuffer(binFile))
-	{
-		console.error('Bailing on save, previous model had higher score.');
-		console.error('Reloading model...');
-		network.loadBuffer(binFile);
-	}
-});
-/*/
 network.loadBuffer(binFile);
 
 let dataset = trainingData;
@@ -59,4 +31,3 @@ shuffle(dataset);
 dataset = dataset.slice(0,1000);
 
 network.score(dataset).then(console.log);
-//*/

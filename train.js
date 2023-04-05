@@ -22,14 +22,13 @@ else
 	network.saveBuffer(binFile);
 }
 
-//*/
 let dataset = trainingData.slice();
 
 shuffle(dataset);
 
 dataset = dataset.slice(0,);
 
-network.train({dataset, poolSize: 8, iterations: 1, rate: 0.0015}).then(() => {
+network.train({dataset, poolSize: 8, iterations: 2, rate: 0.0005}).then(() => {
 	let dataset = testingData.slice();
 
 	shuffle(dataset);
@@ -49,14 +48,3 @@ network.train({dataset, poolSize: 8, iterations: 1, rate: 0.0015}).then(() => {
 		network.loadBuffer(binFile);
 	}
 });
-/*/
-network.loadBuffer(binFile);
-
-let dataset = trainingData;
-
-shuffle(dataset);
-
-dataset = dataset.slice(0,1000);
-
-network.score(dataset).then(console.log);
-//*/

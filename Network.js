@@ -4,12 +4,9 @@ const Layer  = require('./Layer.js');
 
 const fs = require('node:fs');
 
-const transform = item => ({
-	inputs: item.image.map(p => p / 255)
-	, outputs: Array(10).fill(0).map((_,i) => Number(i === item.label))
-});
+const { transform } = require('./common.js');
 
-class Network
+module.exports = class Network
 {
 	constructor({sizes, cells, locks})
 	{
@@ -20,7 +17,7 @@ class Network
 
 		this.totalSize = sizes.reduce((a,b) => a+b,0);
 		this.lastScore = 0;
-		this.score     = 0;
+		this.ratio     = 0;
 
 		let lastLayer, biasSize = 0, connSize = 0, last = 0;
 
@@ -86,11 +83,16 @@ class Network
 		return this.inputs.neurons.map(neuron => neuron.propagate(undefined, rate));
 	}
 
-	loadBuffer(force = false)
+	updateScore(score)
 	{
-		const binFile = __dirname + '/network.bin';
-		const bin     = fs.readFileSync(binFile);
+		this.lastScore = this.ratio;
 
+		this.ratio = score;
+	}
+
+	loadBuffer(binFile, force = false)
+	{
+		const bin     = fs.readFileSync(binFile);
 		const aBuffer = new ArrayBuffer(bin.length);
 		const uInts   = new Uint8Array(aBuffer);
 		const iInts   = new Int32Array(aBuffer);
@@ -103,38 +105,29 @@ class Network
 
 		const newScore = floats[0];
 
-		if(!force && newScore < this.score)
+		if(!force && newScore < this.ratio)
 		{
-			console.error('Bailing on load, current model has higher score.');
-
-			return;
-		}
-
-		this.score = floats[0];
-
-		this.cells.set(iInts.slice(1));
-	}
-
-	updateScore(score)
-	{
-		this.lastScore = this.score;
-
-		this.score = score;
-	}
-
-	saveBuffer(force = false)
-	{
-		if(!force && this.lastScore > this.score)
-		{
-			console.error('Bailing on save, previous model had higher score.');
-
+			// console.error('Bailing on load, current model has higher score.');
 			return false;
 		}
 
-		const binFile  = __dirname + '/network.bin';
+		this.ratio = floats[0];
+
+		this.cells.set(iInts.slice(1));
+
+		return true;
+	}
+
+	saveBuffer(binFile, force = false)
+	{
+		if(!force && this.lastScore > this.ratio)
+		{
+			return false;
+		}
+
 		const buffer   = Buffer.alloc(4 + this.cells.buffer.byteLength);
 		const uInts    = new Uint8Array(this.cells.buffer);
-		const floats   = new Float32Array([this.score]);
+		const floats   = new Float32Array([this.ratio]);
 		const scoreInts = new Uint8Array(floats.buffer);
 
 		for(let i = 0; i < scoreInts.length; i++)
@@ -169,7 +162,7 @@ class Network
 			for(let i = 0; i < poolSize; i++)
 			{
 				const promise = new Promise((accept, reject) => {
-					const worker = new Worker(__filename, {workerData: {
+					const worker = new Worker(__dirname + '/TrainThread.js', {workerData: {
 						sizes: this.sizes,
 						cells: this.cells,
 						locks: this.locks,
@@ -195,64 +188,115 @@ class Network
 
 		return iterate(iterations);
 	}
+
+	score({dataset, poolSize = 8})
+	{
+		const promises = [];
+
+		const chunkSize = Math.ceil(dataset.length / poolSize);
+
+		for(let i = 0; i < poolSize; i++)
+		{
+			const promise = new Promise((accept, reject) => {
+				const worker = new Worker(__dirname + '/ScoreThread.js', {workerData: {
+					sizes: this.sizes,
+					cells: this.cells,
+					locks: this.locks,
+					childId: i,
+					poolSize,
+					dataset: dataset.slice(i * chunkSize, (1 + i) * chunkSize),
+				}});
+
+				let score = 0;
+
+				worker.on('message', message => {
+					if(typeof message === 'string')
+					{
+						console.error(message);
+						return;
+					}
+
+					if('score' in message)
+					{
+						score = message.score;
+					}
+				});
+				worker.on('error', error => reject(error));
+				worker.on('exit',  code  => code ? reject(code) : accept(score));
+			});
+
+			promise.catch(console.error);
+
+			promises.push(promise);
+		}
+
+		return Promise.all(promises).then((scores) => {
+			const total = scores.reduce((a,b) => a+b, 0);
+			const avg   = total / scores.length;
+
+			this.updateScore(avg);
+
+			return avg;
+		});
+	}
 }
 
 if(isMainThread)
 {
-	module.exports = Network;
+	// module.exports = Network;
 }
 else
 {
-	const network = new Network(workerData);
+	// const network = new Network(workerData);
 
-	let p    = 0;
+	// let p    = 0;
 
-	const iterations = workerData.iterations;
-	const poolSize   = workerData.poolSize;
-	const dataset    = workerData.dataset;
+	// const iterations = workerData.iterations;
+	// const poolSize   = workerData.poolSize;
+	// const dataset    = workerData.dataset;
 
-	const start  = Date.now() / 1000;
-	const rate   = workerData.rate;
-	const id     = workerData.childId;
+	// const start  = Date.now() / 1000;
+	// const rate   = workerData.rate;
+	// const id     = workerData.childId;
 
-	const reportMod = 10;
+	// const reportMod = 10;
 
-	let i = 0;
-	let last = Date.now() / 1000;
+	// let i = 0;
+	// let last = Date.now() / 1000;
 
-	const max = dataset.length;
+	// const max = dataset.length;
 
-	while(dataset.length)
-	{
-		const datum = transform(dataset.pop());
+	// while(dataset.length)
+	// {
+	// 	const datum = transform(dataset.shift());
 
-		network.activate(datum.inputs);
-		network.propagate(datum.outputs, rate);
+	// 	network.activate(datum.inputs);
+	// 	network.propagate(datum.outputs, rate);
 
-		if(i && i % reportMod === 0)
-		{
-			const now   = Date.now() / 1000;
-			const diff  = now - last || Number.EPSILON;
-			const speed = (reportMod / diff);
-			const done  = ((1+i) / max);
-			const time  = now - start;
-			const left  = (time / done) + -time;
+	// 	if(i && i % reportMod === 0)
+	// 	{
+	// 		const now   = Date.now() / 1000;
+	// 		const diff  = now - last || Number.EPSILON;
+	// 		const speed = (reportMod / diff);
+	// 		const done  = ((1+i) / max);
+	// 		const time  = now - start;
+	// 		const left  = (time / done) + -time;
 
-			const minutes = Math.trunc(left / 60);
-			const seconds = Math.trunc(left % 60);
+	// 		const minutes = Math.trunc(left / 60);
+	// 		const seconds = Math.trunc(left % 60);
 
-			parentPort.postMessage(
-				`${-iterations}::${poolSize}::${id}  |  `
-				+ `${speed.toFixed(2)} i/s  |  `
-				+ `${diff.toFixed(2)}s  |  `
-				+ `${(done * 100).toFixed(2)}%  |  `
-				+ `${i} / ${max}  |  `
-				+ `${minutes}:${String(seconds).padStart(2, 0)}`
-			);
+	// 		parentPort.postMessage(
+	// 			`${-iterations}::${poolSize}::${id}  |  `
+	// 			+ `${speed.toFixed(2)} i/s  |  `
+	// 			+ `${diff.toFixed(2)}s  |  `
+	// 			+ `${(done * 100).toFixed(2)}%  |  `
+	// 			+ `${i} / ${max}  |  `
+	// 			+ `${minutes}:${String(seconds).padStart(2, 0)}`
+	// 		);
 
-			last = now;
-		}
+	// 		last = now;
+	// 	}
 
-		i++;
-	}
+	// 	i++;
+	// }
 }

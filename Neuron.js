@@ -16,6 +16,10 @@ const float2int = floatVal => {
 	return convertView.getInt32(0);
 };
 
+const biasPtr = neuron => {
+	return neuron.id;
+};
+
 const weightPtr = (neuron, other) => {
 	const wStart     = neuron.network.totalSize;
 	const idInLayer  = neuron.id + neuron.idOffset;
@@ -29,7 +33,7 @@ const weightPtr = (neuron, other) => {
 
 module.exports = class Neuron
 {
-	constructor({bias, network, layer, offset, idOffset} = {})
+	constructor({network, layer, offset, idOffset} = {})
 	{
 		this.layerOffset = offset;
 		this.idOffset = idOffset;
@@ -43,17 +47,16 @@ module.exports = class Neuron
 		this.initialized = false;
 		this.network     = network;
 		this.layer       = layer;
-		this.bias        = bias;
 
 		this.cells = network.cells;
 		this.locks = network.locks;
 
-		if(!this.bias)
-		{
-			Atomics.store(this.cells, this.id, float2int(this.bias ?? Math.random() * 2 - 1));
-		}
+		const bias = int2float(Atomics.load(this.cells, biasPtr(this)));
 
-		this.bias = int2float(Atomics.load(this.cells, this.id));
+		if(!bias)
+		{
+			Atomics.store(this.cells, biasPtr(this), float2int(Math.random() * 2 - 1));
+		}
 
 		this.sumIncoming = (total, other) => {
 			return total + other.locals[1] * int2float(Atomics.load(this.cells, weightPtr(other, this)));
@@ -87,7 +90,7 @@ module.exports = class Neuron
 		}
 		else
 		{
-			const sum = [...this.incoming].reduce(this.sumIncoming, int2float(Atomics.load(this.cells, this.id)));
+			const sum = [...this.incoming].reduce(this.sumIncoming, int2float(Atomics.load(this.cells, biasPtr(this))));
 
 			locals[0] = asigmoid(sum);
 			locals[1]  = sigmoid(sum);
@@ -98,7 +101,7 @@ module.exports = class Neuron
 
 	propagate(target, rate = 0.1)
 	{
-		this.lockCell(this.id);
+		this.lockCell(biasPtr(this));
 
 		const locals = this.locals;
 
@@ -111,7 +114,7 @@ module.exports = class Neuron
 
 					let weight = int2float(Atomics.load(this.cells, ptr));
 
-					weight -= rate * otherError * this.locals[1];
+					weight -= rate * otherError * locals[1];
 
 					Atomics.store(this.cells, ptr, float2int(weight));
 
@@ -121,13 +124,13 @@ module.exports = class Neuron
 			)
 			: locals[1] - target;
 
-		let bias = int2float(Atomics.load(this.cells, this.id));
+		let bias = int2float(Atomics.load(this.cells, biasPtr(this)));
 
 		bias -= rate * locals[2];
 
-		Atomics.store(this.cells, this.id, float2int(bias));
+		Atomics.store(this.cells, biasPtr(this), float2int(bias));
 
-		this.unlockCell(this.id);
+		this.unlockCell(biasPtr(this));
 
 		locals[2] = sum * locals[0]
 
@@ -148,6 +151,6 @@ module.exports = class Neuron
 	unlockCell(ptr)
 	{
 		Atomics.store(this.locks, ptr, 0);
-		Atomics.notify(this.locks, ptr, 4);
+		Atomics.notify(this.locks, ptr, 1);
 	}
 }
